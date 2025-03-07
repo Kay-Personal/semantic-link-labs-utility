@@ -173,6 +173,7 @@ def run_test_cycle(
             dax_queries=_queries_toDict(queries_df),
             workspace=target_workspace_name,
             clear_query_cache=clear_query_cache,
+            timeout=trace_timeout,
         )
 
         if trace_df:
@@ -480,6 +481,143 @@ def _get_query_text(
         if query["QueryId"] == query_id:
             return query["QueryText"]
     return default
+
+
+def warmup_test_models(
+     test_suite: TestSuite,
+) -> None:
+    """
+    Run all DAX queries defined in the test suite against their test models
+    to ensure their data is resident in memory (warm up).
+
+    Parameters
+    ----------
+    test_suite: TestSuite
+        A TestSuite object with the test definitions.
+        The test definitions must have the following fields.
+        +---------+---------------+-------------+
+        |QueryText|TargetWorkspace|TargetDataset|
+        +---------+---------------+-------------+
+    Returns
+    -------
+    None
+    """
+    import urllib.parse
+
+    for row in test_suite.to_df().dropDuplicates(['TargetWorkspace', 'TargetDataset']).collect():
+        target_dataset = row['TargetDataset']
+        target_workspace = row['TargetWorkspace']
+
+        # Skip this row if the target semantic model is not defined.
+        if not target_dataset:
+            print(f"{icons.red_dot} No test semantic model specifed as the target dataset. Ignoring this row. Please review your test definitions.")
+            continue
+
+        # URL-encode the workspace name
+        filter_condition = urllib.parse.quote(target_workspace)
+        dfW = fabric.list_workspaces(filter=f"name eq '{filter_condition}' or id eq '{filter_condition}'")
+        if not dfW.empty:
+            target_workspace_id = dfW.iloc[0]['Id']
+        else:
+            print(f"{icons.red_dot} Unable to resolve workspace '{target_workspace}' for test semantic model '{target_dataset}'. Ignoring this row. Please review your test definitions.")
+            continue 
+
+        # Skip this row if the target_dataset does not exist.
+        dfSM = fabric.list_datasets(target_workspace_id)
+        dfSM = dfSM[
+            (dfSM["Dataset Name"] == target_dataset)
+            | (dfSM["Dataset ID"] == target_dataset)
+        ]
+        if dfSM.empty:
+            print(f"{icons.red_dot} Unable to find the test semantic model '{target_dataset}' in workspace '{target_workspace}'. Ignoring this row. Please review your test definitions.")
+            continue
+
+        # Filter the test suite and select the QueryText column
+        df = test_suite.to_df()
+        queries_df = df.filter((df.TargetWorkspace == target_workspace) & (df.TargetDataset == target_dataset)).select("QueryText")
+        for row in queries_df.collect():
+            fabric.evaluate_dax(
+                dataset=target_dataset, 
+                workspace=target_workspace, 
+                dax_string=row.QueryText)
+        print(f"{icons.green_dot} {queries_df.count()} queries executed to warm up semantic model '{target_dataset}' in workspace '{target_workspace}'.")
+
+
+def refresh_test_models(
+    test_suite: TestSuite,
+    refresh_type: str = "full",
+) -> None:
+    """
+    Refreshes the test models referenced in the test definitions of the provided test suite.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with the test definitions.
+        The test definitions must have the following fields.
+        +---------+---------------+-------------+
+        |QueryText|TargetWorkspace|TargetDataset|
+        +---------+---------------+-------------+
+    refresh_type : str, Default = full
+        The type of processing to perform for each test semantic model.
+        Types align with the TMSL refresh command types: full, clearValues, calculate, dataOnly, automatic, and defragment. 
+        The add type isn't supported.
+        In addition, refresh_type can be set to clearValuesFull, which performs a clearValues refresh followed by a full refresh.
+
+    """
+    import urllib.parse
+
+    test_definitions = test_suite.to_df()
+    for row in test_definitions.dropDuplicates(['TargetWorkspace', 'TargetDataset']).collect():
+        target_dataset = row['TargetDataset']
+        target_workspace = row['TargetWorkspace']
+
+        # Skip this row if the target semantic model is not defined.
+        if not target_dataset:
+            print(f"{icons.red_dot} No test semantic model specifed as the target dataset. Ignoring this row. Please review your test definitions.")
+            continue
+
+        # URL-encode the workspace name
+        filter_condition = urllib.parse.quote(target_workspace)
+        dfW = fabric.list_workspaces(filter=f"name eq '{filter_condition}' or id eq '{filter_condition}'")
+        if not dfW.empty:
+            target_workspace_id = dfW.iloc[0]['Id']
+        else:
+            print(f"{icons.red_dot} Unable to resolve workspace '{target_workspace}' for test semantic model '{target_dataset}'. Ignoring this row. Please review your test definitions.")
+            continue 
+
+        # Skip this row if the target_dataset does not exist.
+        dfSM = fabric.list_datasets(target_workspace_id)
+        dfSM = dfSM[
+            (dfSM["Dataset Name"] == target_dataset)
+            | (dfSM["Dataset ID"] == target_dataset)
+        ]
+        if dfSM.empty:
+            print(f"{icons.red_dot} Unable to find the test semantic model '{target_dataset}' in workspace '{target_workspace}'. Ignoring this row. Please review your test definitions.")
+            continue         
+
+        target_dataset_id = dfSM.iloc[0]["Dataset ID"]
+
+        if not refresh_type:
+            print(f"{icons.red_dot} Unable to refresh test definitions because no refresh type was specified.")
+        elif refresh_type == "clearValuesFull":
+            # The refresh type 'clearValuesFull' requires 2 refresh_semantic_model calls
+            # 1. clearValues, 2. full
+            refresh_semantic_model( 
+                dataset=target_dataset_id, 
+                workspace=target_workspace_id, 
+                refresh_type="clearValues")
+            refresh_semantic_model( 
+                dataset=target_dataset_id, 
+                workspace=target_workspace_id, 
+                refresh_type="full")
+        else:
+            # The refresh type is supported by the refresh_semantic_model function.
+            refresh_semantic_model( 
+                dataset=target_dataset_id, 
+                workspace=target_workspace_id, 
+                refresh_type=refresh_type)
+
 
 class ExecutionTracker:
     """

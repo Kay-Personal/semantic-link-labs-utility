@@ -7,6 +7,8 @@ from sempy_labs.perf_lab._test_cycle import (
     ExecutionTracker,
     initialize_test_cycle,
     run_test_cycle,
+    warmup_test_models,
+    refresh_test_models,
 )
 
 from sempy_labs.perf_lab._lab_infrastructure import (
@@ -26,6 +28,8 @@ __all__ = [
     "ExecutionTracker",
     "initialize_test_cycle",
     "run_test_cycle",
+    "warmup_test_models",
+    "refresh_test_models",
     "provision_lakehouses",
     "provision_lakehouse",
     "deprovision_lakehouses",
