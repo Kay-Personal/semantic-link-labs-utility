@@ -5,6 +5,7 @@ import sempy.fabric as fabric
 from sempy.fabric.exceptions import FabricHTTPException
 
 import sempy_labs._icons as icons
+from sempy_labs.perf_lab._test_suite import TestSuite
 from sempy_labs._helper_functions import (
     _get_or_create_workspace,
     _get_or_create_lakehouse,
@@ -16,7 +17,7 @@ from sempy_labs._helper_functions import (
 
 TableGeneratorCallback = Callable[[UUID, UUID, dict], None]
 
-def provision_sample_lakehouse(
+def provision_lakehouse(
     workspace: Optional[str | UUID] = None,
     capacity_id: Optional[UUID] = None,
     lakehouse: Optional[str | UUID] = None,
@@ -76,9 +77,49 @@ def provision_sample_lakehouse(
         
     return(workspace_id, lakehouse_id)
 
+def deprovision_lakehouses(
+    test_suite: TestSuite,
+)->None:
+    """
+    Deprovisions lakehouses listed in the test definitions.
+    These lakehouses may contain tables other then the perf lab tables, 
+    which will all be removed together with the lakehouses.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with the semantic model and data source definitions, such as the a test suite returned by the _get_test_definitions_df() function.
+
+    Returns
+    -------
+    None
+    """
+    import notebookutils
+    
+    test_definitions = test_suite.to_df()
+    lakehouses_df = test_definitions.filter(
+        test_definitions["DatasourceType"] == "Lakehouse"
+        ).dropDuplicates(['DatasourceName', 'DatasourceWorkspace'])
+    
+    if lakehouses_df.count() > 0:
+        print(f"{icons.in_progress} Deleting '{lakehouses_df.count()}' lakehouses.")
+
+        for lhs in lakehouses_df.dropDuplicates(['DatasourceName', 'DatasourceWorkspace']).collect():
+            # Catch all exceptions so that the loop continues even when an error occurs for a particular lakehouse.
+            try:
+                lakehouse_name = lhs['DatasourceName']
+                (workspace_name, workspace_id) = resolve_workspace_name_and_id(workspace=lhs['DatasourceWorkspace'])
+
+                notebookutils.lakehouse.delete(lakehouse_name, workspace_id)
+                print(f"{icons.checked} Lakehouse '{lakehouse_name}' in workspace '{workspace_name}' deleted successfully.")
+            except Exception as e:
+                print(f"{icons.red_dot} {e}")
+    else:
+        print(f"{icons.red_dot} No lakehouses found in the test definitions.")
+
 MetadataGeneratorCallback = Callable[[str, UUID, bool], None]
 
-def provision_sample_semantic_model(
+def provision_semantic_model(
     workspace: str | UUID,
     lakehouse: str | UUID,
     semantic_model_name: str,
@@ -223,3 +264,74 @@ def _generate_onelake_shared_expression(
     mid_expr = f"AzureStorage.DataLake(\"{dfsEP}/{workspace_id}/{item_id}\")"
 
     return f"{start_expr}{mid_expr}{end_expr}"
+
+def deprovision_semantic_models(
+    test_suite: TestSuite,
+    delete_masters: Optional[bool]=False
+):
+    """
+    Deprovisions test clones and optionally also the master semantic models listed in the test definitions.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with the semantic model and data source definitions, such as the a test suite returned by the _get_test_definitions_df() function.
+    delete_masters : bool, default=False
+        A flag indicating if master semantic models should be deleted in addition to the test model clones.
+    """
+    test_definitions = test_suite.to_df()
+
+    masters_df = test_definitions.dropDuplicates(['MasterDataset', 'MasterWorkspace'])
+    if delete_masters and masters_df.count() > 0:
+        print(f"{icons.in_progress} Deleting '{masters_df.count()}' master semantic models.")
+        for m in masters_df.collect():
+            # Catch all exceptions so that the loop continues even when an error occurs for a particular model.
+            try:
+                delete_semantic_model(
+                    dataset = m['MasterDataset'],
+                    workspace = m['MasterWorkspace']
+                )
+            except Exception as e:
+                print(f"{icons.red_dot} {e}")
+
+    clones_df = test_definitions.dropDuplicates(['TargetDataset', 'TargetWorkspace'])
+    if clones_df.count() > 0:
+        print(f"{icons.in_progress} Deleting '{clones_df.count()}' test semantic models.")
+        for c in clones_df.collect():
+            # Catch all exceptions so that the loop continues even when an error occurs for a particular model.
+            try:
+                delete_semantic_model(
+                    dataset = c['TargetDataset'],
+                    workspace = c['TargetWorkspace']
+                )
+            except Exception as e:
+                print(f"{icons.red_dot} {e}")
+    else:
+        print(f"{icons.red_dot} No test semantic models found in the test definitions.")
+
+def delete_semantic_model(
+    dataset: str | UUID,
+    workspace: str | UUID,
+):
+    """
+    Deletes a semantic model from the specified workspace.
+
+    Parameters
+    ----------
+    dataset : TestSuite
+        The name or ID of the semantic model to be deleted.
+    workspace : str | uuid.UUID
+        The Fabric workspace name or ID where the semantic model is located.
+        The workspace must be specified and must exist or the function fails with a WorkspaceNotFoundException.
+    """
+    (workspace_name, workspace_id) = resolve_workspace_name_and_id(workspace)
+    (dataset_name, dataset_id) = resolve_dataset_name_and_id(dataset=dataset, workspace=workspace_id)
+
+    client = fabric.FabricRestClient()
+    response = client.delete(
+        f"/v1/workspaces/{workspace_id}/semanticModels/{dataset_id}")
+
+    if response.status_code == 200:
+        print(f"{icons.checked} Semantic model '{dataset_name}' in workspace '{workspace_name}' deleted successfully.")
+    else:
+        print(f"{icons.red_dot} response.")
