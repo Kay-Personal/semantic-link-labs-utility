@@ -1,5 +1,5 @@
 from uuid import UUID
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple, Callable, List
 
 import sempy.fabric as fabric
 from sempy.fabric.exceptions import FabricHTTPException
@@ -17,9 +17,70 @@ from sempy_labs._helper_functions import (
 
 TableGeneratorCallback = Callable[[UUID, UUID, dict], None]
 
+def provision_lakehouses(
+    test_suite: TestSuite,
+    capacity: Optional[str | UUID] = None,
+    table_properties: Optional[dict] = None,
+    table_generator: Optional[TableGeneratorCallback] = None,
+    workspace_description: Optional[str] = "A master workspace with a sample lakehouse and a Direct Lake semantic model that uses the Delta tables from the sample lakehouse.",
+    lakehouse_description: Optional[str] = "A lakehouse with automatically generated sample Delta tables.",
+)  -> List[Tuple[UUID, UUID]]:
+    """
+    Creates lakehouses referenced in the test definitions of a test suite as data sources if they don't exist,
+    and returns the workspace IDs and Lakehouse IDs for all referenced lakehouses.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with test definitions referencing lakehouses as data sources.
+    capacity : str | uuid.UUID, default=None
+        The name or ID of the capacity on which to place the new workspace.
+        Defaults to None which resolves to the capacity of the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the capacity of the workspace of the notebook.
+    table_properties: dict, default=None
+        A dictionary of property values that the provision_perf_lab_lakehouse function passes to the table_generator function.
+        The keys and values in the dictionary are specific to the table_generator function.
+    table_generator : TableGeneratorCallback, default=None
+        A callback function to generate and persist the actual Delta tables in the lakehouse.
+    workspace_description : str, default="A master workspace with a sample lakehouse and a Direct Lake semantic model that uses the Delta tables from the sample lakehouse."
+        A description for the workspace to be applied when the workspace is created.
+    lakehouse_description : str, default="A lakehouse with automatically generated sample Delta tables."
+        A description for the lakehouse to be applied when the lakehouse is created.
+
+    Returns
+    -------
+    List[Tuple[uuid.UUID, uuid.UUID]]:
+        A list of tuples for the provisioned workspace IDs and lakehouse IDs.
+    """
+    id_pairs = []
+    test_definitions = test_suite.to_df()
+    lakehouses_df = test_definitions.filter(
+        test_definitions["DatasourceType"] == "Lakehouse"
+        ).dropDuplicates(['DatasourceName', 'DatasourceWorkspace'])
+    if lakehouses_df.count() > 0:
+        for lhs in lakehouses_df.dropDuplicates(['DatasourceName', 'DatasourceWorkspace']).collect():
+            # Catch all exceptions so that the loop continues even when an error occurs for a particular lakehouse.
+            try:
+                (workspace_id, lakehouse_id) = provision_lakehouse(
+                        workspace = lhs['DatasourceWorkspace'], 
+                        capacity = capacity,
+                        lakehouse = lhs['DatasourceName'],
+                        table_properties=table_properties,
+                        table_generator=table_generator,
+                        workspace_description = workspace_description,
+                        lakehouse_description = lakehouse_description,
+                    )
+                id_pairs.append((workspace_id, lakehouse_id))
+            except Exception as e:
+                print(f"{icons.red_dot} {e}")
+    else:
+        print(f"{icons.red_dot} No lakehouses found in the test definitions.")
+
+    return id_pairs
+    
 def provision_lakehouse(
     workspace: Optional[str | UUID] = None,
-    capacity_id: Optional[UUID] = None,
+    capacity: Optional[str | UUID] = None,
     lakehouse: Optional[str | UUID] = None,
     table_properties: Optional[dict] = None,
     table_generator: Optional[TableGeneratorCallback] = None,
@@ -35,8 +96,8 @@ def provision_lakehouse(
         The Fabric workspace name or ID.
         Defaults to None which resolves to the workspace of the attached lakehouse
         or if no lakehouse attached, resolves to the workspace of the notebook.
-    capacity_id : uuid.UUID, default=None
-        The ID of the capacity on which to place the new workspace.
+    capacity : str | uuid.UUID, default=None
+        The name or ID of the capacity on which to place the new workspace.
         Defaults to None which resolves to the capacity of the workspace of the attached lakehouse
         or if no lakehouse attached, resolves to the capacity of the workspace of the notebook.
     lakehouse : str | uuid.UUID, default=None
@@ -60,7 +121,7 @@ def provision_lakehouse(
 
     # Resolve the workspace name and id and provision a workspace if it doesn't exist.
     (workspace_name, workspace_id) = _get_or_create_workspace(
-        workspace = workspace, capacity=capacity_id,
+        workspace = workspace, capacity=capacity,
         description = workspace_description)
 
     # Resolve the lakehouse name and id and provision a lakehouse if it doesn't exist.
@@ -118,6 +179,59 @@ def deprovision_lakehouses(
         print(f"{icons.red_dot} No lakehouses found in the test definitions.")
 
 MetadataGeneratorCallback = Callable[[str, UUID, bool], None]
+
+def provision_master_semantic_models(
+    test_suite: TestSuite,
+    semantic_model_mode: Optional[str] = "OneLake",
+    overwrite: Optional[bool] = False,
+    metadata_generator: Optional[MetadataGeneratorCallback] = None,
+) -> List[Tuple[str, UUID]]:
+    """
+    Creates master sematnic models referenced in the test definitions of a test suite
+    if they use a lakehouse as their data source 
+    and returns their names and IDs.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with test definitions referencing master semantic models to be created.
+    semantic_model_mode : str, Default = OneLake. Options: 'SQL', 'OneLake'.
+        An optional parameter to specify the mode of the semantic model. Two modes are supported: SQL and OneLake. By default, the function generates a Direct Lake model in OneLake mode.
+    overwrite : bool, default=False
+        If set to True, overwrites the existing semantic model if it already exists.
+    metadata_generator : MetadataGeneratorCallback, default = None
+        A callback function to apply specific metadata to a semantic model.
+
+    Returns
+    -------
+    List[Tuple[str, uuid.UUID]]:
+        A list of tuples for the provisioned semantic model names and IDs.
+    """
+    name_id_pairs = []
+    test_definitions = test_suite.to_df()
+
+    masters_df = test_definitions.filter(
+        test_definitions["DatasourceType"] == "Lakehouse"
+        ).dropDuplicates(['MasterDataset', 'MasterWorkspace', 'DatasourceName'])
+    if masters_df.count() > 0:
+        for m in masters_df.collect():
+            # Catch all exceptions so that the loop continues even when an error occurs for a particular model.
+            try:
+                (master_dataset_name, master_dataset_id) = provision_semantic_model(
+                    workspace = m['MasterWorkspace'], 
+                    lakehouse=m['DatasourceName'], 
+                    semantic_model_name = m['MasterDataset'],
+                    semantic_model_mode = semantic_model_mode,
+                    overwrite = overwrite,
+                    metadata_generator = metadata_generator,
+                    )
+                name_id_pairs.append((master_dataset_name, master_dataset_id))
+            except Exception as e:
+                print(f"{icons.red_dot} {e}")
+    else:
+        print(f"{icons.red_dot} No master semantic model references found in the test definitions.")
+
+    return name_id_pairs
 
 def provision_semantic_model(
     workspace: str | UUID,
@@ -335,3 +449,58 @@ def delete_semantic_model(
         print(f"{icons.checked} Semantic model '{dataset_name}' in workspace '{workspace_name}' deleted successfully.")
     else:
         print(f"{icons.red_dot} response.")
+
+def provision_test_semantic_models(
+    test_suite: TestSuite,
+    capacity: Optional[str | UUID] = None,
+    refresh_clones: Optional[bool] = True,
+    ):
+    """
+    Creates test models from the master models specified in the test defintions dataframe.
+
+    Parameters
+    ----------
+    test_suite : TestSuite
+        A TestSuite object with the test definitions.
+    capacity : str | uuid.UUID, default=None
+        The name or ID of the capacity on which to place the new workspace.
+        Defaults to None which resolves to the capacity of the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the capacity of the workspace of the notebook.
+    refresh_clones : bool, default=True
+        If set to True, this will initiate a full refresh of the cloned semantic models in the target workspace.
+
+    """
+    from sempy_labs import deploy_semantic_model
+    
+    for row in test_suite.to_df().dropDuplicates(['MasterWorkspace','MasterDataset','TargetWorkspace', 'TargetDataset']).collect():
+        master_dataset = row['MasterDataset']
+        master_workspace = row['MasterWorkspace']
+        target_dataset = row['TargetDataset']
+        target_workspace = row['TargetWorkspace']
+
+        # Skip this row if master or target are not defined.
+        if not master_dataset or not target_dataset:
+            continue
+
+        # Make sure the target_workspace exists.
+        (target_workspace_name, target_workspace_id) = _get_or_create_workspace(
+                workspace=target_workspace, capacity=capacity,
+                description="A semantic model for query tests in a perf lab."
+            )
+
+        # Do not overwrite existing test models because some model settings, such as Direct Lake autosync
+        # can only be configured manually right now, and would be lost if automation just replaced the existing
+        # model with a new semantic model clone.
+        dfD = fabric.list_datasets(workspace=target_workspace_id, mode="rest")
+        dfD_filt = dfD[dfD["Dataset Name"] == target_dataset]
+        if dfD_filt.empty:
+            deploy_semantic_model(
+                source_dataset=master_dataset,
+                source_workspace=master_workspace,
+                target_dataset=target_dataset,
+                target_workspace=target_workspace,
+                refresh_target_dataset=refresh_clones,
+                overwrite=False,
+            )
+        else:
+            print(f"{icons.green_dot} The test semantic model '{target_dataset}' already exists in the workspace '{target_workspace_name}'.")
