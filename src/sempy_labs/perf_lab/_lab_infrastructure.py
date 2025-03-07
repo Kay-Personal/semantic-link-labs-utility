@@ -1,0 +1,225 @@
+from uuid import UUID
+from typing import Optional, Tuple, Callable
+
+import sempy.fabric as fabric
+from sempy.fabric.exceptions import FabricHTTPException
+
+import sempy_labs._icons as icons
+from sempy_labs._helper_functions import (
+    _get_or_create_workspace,
+    _get_or_create_lakehouse,
+    resolve_workspace_name_and_id,
+    resolve_lakehouse_name_and_id,
+    resolve_dataset_name_and_id,
+)
+
+
+TableGeneratorCallback = Callable[[UUID, UUID, dict], None]
+
+def provision_sample_lakehouse(
+    workspace: Optional[str | UUID] = None,
+    capacity_id: Optional[UUID] = None,
+    lakehouse: Optional[str | UUID] = None,
+    table_properties: Optional[dict] = None,
+    table_generator: Optional[TableGeneratorCallback] = None,
+    workspace_description: Optional[str] = "A master workspace with a sample lakehouse and a Direct Lake semantic model that uses the Delta tables from the sample lakehouse.",
+    lakehouse_description: Optional[str] = "A lakehouse with automatically generated sample Delta tables.",
+)  -> Tuple[UUID, UUID]:
+    """
+    Generates sample data for a date table.
+
+    Parameters
+    ----------
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    capacity_id : uuid.UUID, default=None
+        The ID of the capacity on which to place the new workspace.
+        Defaults to None which resolves to the capacity of the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the capacity of the workspace of the notebook.
+    lakehouse : str | uuid.UUID, default=None
+        The name or ID of the lakehouse.
+        Defaults to None which resolves to the lakehouse attached to the notebook.
+    table_properties: dict, default=None
+        A dictionary of property values that the provision_perf_lab_lakehouse function passes to the table_generator function.
+        The keys and values in the dictionary are specific to the table_generator function.
+    table_generator : TableGeneratorCallback, default=None
+        A callback function to generate and persist the actual Delta tables in the lakehouse.
+    workspace_description : str, default="A master workspace with a sample lakehouse and a Direct Lake semantic model that uses the Delta tables from the sample lakehouse."
+        A description for the workspace to be applied when the workspace is created.
+    lakehouse_description : str, default="A lakehouse with automatically generated sample Delta tables."
+        A description for the lakehouse to be applied when the lakehouse is created.
+
+    Returns
+    -------
+    Tuple[uuid.UUID, uuid.UUID]
+        A tuple of the provisioned workspace and lakehouse IDs.
+    """
+
+    # Resolve the workspace name and id and provision a workspace if it doesn't exist.
+    (workspace_name, workspace_id) = _get_or_create_workspace(
+        workspace = workspace, capacity=capacity_id,
+        description = workspace_description)
+
+    # Resolve the lakehouse name and id and provision a lakehouse if it doesn't exist.
+    (lakehouse_name, lakehouse_id) = _get_or_create_lakehouse(
+        lakehouse = lakehouse, workspace = workspace_id,
+        description = lakehouse_description)
+
+    # Call the provided callback function to generate the Delta tables.
+    if table_generator:
+        table_generator(
+            workspace_id,
+            lakehouse_id,
+            table_properties)
+        
+    return(workspace_id, lakehouse_id)
+
+MetadataGeneratorCallback = Callable[[str, UUID, bool], None]
+
+def provision_sample_semantic_model(
+    workspace: str | UUID,
+    lakehouse: str | UUID,
+    semantic_model_name: str,
+    semantic_model_mode: Optional[str] = "OneLake",
+    overwrite: Optional[bool] = False,
+    metadata_generator: Optional[MetadataGeneratorCallback] = None,
+) -> Tuple[str, UUID]:
+    """
+    Creates a semantic model in Direct Lake mode in the specified workspace using the specified lakehouse as the data source.
+    Assumes a specific structure of Delta tables provisioned using a metadata generator callback functions.
+
+    Parameters
+    ----------
+    workspace : str | uuid.UUID
+        The Fabric workspace name or ID where the semantic model should be created.
+        The workspace must be specified and must exist or the function fails with a WorkspaceNotFoundException.
+    lakehouse : str | uuid.UUID
+        The name or ID of the lakehouse that the semantic model should use as the data source.
+        The lakehouse must be specified and must exist in the specified workspace or the function fails with a ValueException stating that the lakehouse was not found.
+    semantic_model_name : str
+        The name of the semantic model. The semantic model name must be specified. 
+        If a model with the same name already exists, the function fails with a ValueException due to a naming conflict. 
+    semantic_model_mode : str, Default = OneLake. Options: 'SQL', 'OneLake'.
+        An optional parameter to specify the mode of the semantic model. Two modes are supported: SQL and OneLake. By default, the function generates a Direct Lake model in OneLake mode.
+    overwrite : bool, default=False
+        If set to True, overwrites the existing semantic model if it already exists.
+    metadata_generator : MetadataGeneratorCallback, default = None
+        A callback function to apply specific metadata to a semantic model.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple holding the name and ID of the created semantic model.
+    """
+    from sempy_labs.tom import connect_semantic_model
+    from sempy_labs import (
+        refresh_semantic_model, 
+        directlake as dl,
+        lakehouse as lh
+    )
+
+    # Verify that the mode is valid.
+    semantic_model_modes = ["SQL", "ONELAKE"]
+    semantic_model_mode = semantic_model_mode.upper()
+    if semantic_model_mode not in semantic_model_modes:
+        raise ValueError(
+            f"{icons.red_dot} Invalid semantic model mode. Valid options: {semantic_model_modes}."
+        )
+
+    # Make sure the workspace exists. Raises WorkspaceNotFoundException otherwise.
+    (workspace_name, workspace_id) = resolve_workspace_name_and_id(workspace)
+
+    # Raises a ValueError if there's no lakehouse with the specified name in the workspace.
+    (lakehouse_name, lakehouse_id) = resolve_lakehouse_name_and_id(
+        lakehouse=lakehouse, workspace=workspace_name)
+
+    # Create the intial semantic model
+    tables = lh.get_lakehouse_tables(lakehouse=lakehouse_id, workspace=workspace_id)
+    table_names = tables['Table Name'].tolist()
+    print(f"{icons.table_icon} {len(table_names)} tables found in lakehouse '{lakehouse_name}'.")
+
+    # Create the intial semantic model
+    print(f"{icons.in_progress} Creating Direct Lake semantic model '{semantic_model_name}' in workspace '{workspace_name}'.")
+    dl.generate_direct_lake_semantic_model(
+        workspace=workspace_id, 
+        lakehouse=lakehouse_name,
+        dataset=semantic_model_name,
+        lakehouse_tables=table_names,
+        overwrite=overwrite,
+        refresh=False)
+    
+    (dataset_name, dataset_id) = resolve_dataset_name_and_id(
+        dataset=semantic_model_name, workspace=workspace_id)
+
+    print(f"{icons.in_progress} Adding final touches to Direct Lake semantic model '{semantic_model_name}' in workspace '{workspace_name}'.")
+    with connect_semantic_model(dataset=dataset_name, workspace=workspace_id, readonly=False) as tom:
+        # If the semantic_model_mode is OneLake,
+        # convert the data access expression in the model to Direct Lake 
+        if semantic_model_mode == semantic_model_modes[1]:
+            expression_name = "DatabaseQuery"
+            expr = _generate_onelake_shared_expression(workspace_id, lakehouse_id)       
+
+            if not any(e.Name == expression_name for e in tom.model.Expressions):
+                tom.add_expression(name=expression_name, expression=expr)
+            else:
+                tom.model.Expressions[expression_name].Expression = expr
+            
+            # Also remove the schemaName property from all the partitions
+            for t in tom.model.Tables:
+                for p in t.Partitions:
+                    p.Source.SchemaName = ""            
+            
+        print(f"{icons.checked} Direct Lake semantic model '{semantic_model_name}' converted to Direct Lake on OneLake mode.")
+
+    if metadata_generator:
+        metadata_generator(
+            dataset_name,
+            workspace_id,
+            (semantic_model_mode == semantic_model_modes[1])
+        )
+
+    refresh_semantic_model(
+        dataset=semantic_model_name, 
+        workspace=workspace_id,
+        retry_count = 3,
+    )
+
+    print(f"{icons.green_dot} Direct Lake semantic model '{semantic_model_name}' in workspace '{workspace_name}' fully provisioned and refreshed.")
+    return (dataset_name, dataset_id)
+
+def _generate_onelake_shared_expression(
+    workspace_id: UUID,
+    item_id: UUID,
+) -> str:
+    """
+    Dynamically generates the M expression used by a Direct Lake model in OneLake mode for a given artifact.
+
+    Parameters
+    ----------
+    workspace_id : UUID
+        The ID of the Fabric workspace in which the Fabric item that owns the Delta tables is located.
+    item_id : UUID
+        The ID of the Fabric item that owns the Delta tables.
+
+    Returns
+    -------
+    str
+        Shows the expression which can be used to connect a Direct Lake semantic model to the DataLake.
+    """
+
+    # Get the dfs endpoint of the workspace
+    client = fabric.FabricRestClient()
+    response = client.get(f"/v1/workspaces/{workspace_id}")
+    if response.status_code != 200:
+        raise FabricHTTPException(response)
+
+    olEPs = response.json().get("oneLakeEndpoints")
+    dfsEP = olEPs.get("dfsEndpoint")
+    
+    start_expr = "let\n\tdatabase = "
+    end_expr = "\nin\n\tdatabase"
+    mid_expr = f"AzureStorage.DataLake(\"{dfsEP}/{workspace_id}/{item_id}\")"
+
+    return f"{start_expr}{mid_expr}{end_expr}"
