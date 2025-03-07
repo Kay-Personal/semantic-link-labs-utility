@@ -22,7 +22,14 @@ from sempy_labs.perf_lab._lab_infrastructure import (
     delete_semantic_model,
 )
 
+from sempy_labs.perf_lab._diagnostics import (
+    get_storage_table_column_segments,
+    get_source_tables
+)
+
 __all__ = [
+    "get_storage_table_column_segments",
+    "get_source_tables",
     "TestDefinition",
     "TestSuite",
     "ExecutionTracker",
