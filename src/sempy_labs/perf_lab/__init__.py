@@ -34,12 +34,14 @@ from sempy_labs.perf_lab._simulated_etl import (
 
 from sempy_labs.perf_lab._sales_sample import (
     SalesLakehouseConfig,
+    SalesSampleQueries,
     provision_sales_tables,
     apply_sales_metadata,
 )
 
 __all__ = [
     "SalesLakehouseConfig",
+    "SalesSampleQueries",
     "TestDefinition",
     "TestSuite",
     "ExecutionTracker",

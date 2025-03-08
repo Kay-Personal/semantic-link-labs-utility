@@ -1,6 +1,8 @@
 
 import pandas as pd
-from typing import Optional, Union
+import urllib.parse
+import sempy.fabric as fabric
+from typing import Optional, Union, List, Tuple
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 from uuid import UUID
@@ -8,6 +10,7 @@ from uuid import UUID
 import sempy_labs._icons as icons
 from sempy_labs.tom import connect_semantic_model
 from sempy_labs.perf_lab._lab_infrastructure import _ensure_table
+from sempy_labs.perf_lab._test_suite import TestSuite, TestDefinition
 from sempy_labs._helper_functions import (
     _create_spark_session,
     save_as_delta_table,
@@ -611,3 +614,339 @@ def apply_sales_metadata(
 
         # Clear the _tables_added list to skip any table refreshes.
         tom._tables_added.clear()
+
+class SalesSampleQueries:
+    def __init__(self):
+        self.sample_queries = [
+            ("Total Sales (Card)", """EVALUATE
+SUMMARIZE(
+    Sales,
+    "Total Sales", SUM(Sales[Sales])
+)"""),
+            # ----------------------------
+            ("Sales Over Time (Line Chart)", """EVALUATE
+SUMMARIZE(
+    'Date',
+    'Date'[Date],
+    "Sales Over Time", CALCULATE(SUM(Sales[Sales]))
+)"""),
+            # ----------------------------
+            ("Sales by Product Category (Column Chart)", """EVALUATE
+SUMMARIZE(
+    'Product',
+    'Product'[ProductCategory],
+    "Sales by Product Category", CALCULATE(SUM(Sales[Sales]))
+)"""),
+            # ----------------------------
+            ("Sales by Location (Map)", """EVALUATE
+SUMMARIZE(
+    Geography,
+    Geography[StateOrTerritory],
+    "Sales by Location", CALCULATE(SUM(Sales[Sales]))
+)"""),
+            # ----------------------------
+            ("Total Profit (Card)", """EVALUATE
+SUMMARIZE(
+    Sales,
+    Geography[Country],
+    "Total Profit", VALUE([Profit])
+)"""),
+            # ----------------------------
+            ("Monthly Sales Trends (Line Chart)", """EVALUATE
+SUMMARIZE(
+    'Date',
+    'Date'[MonthYear],
+    "Monthly Sales Trends", CALCULATE(SUM(Sales[Sales]))
+)"""),
+            # ----------------------------
+            ("Period Comparison", """DEFINE
+MEASURE Sales[Sum of Quantity] = SUM(Sales[Sales])
+MEASURE Sales[Sum of Quantity PM] = CALCULATE([Sum of Quantity],PREVIOUSMONTH('date'[Date]))
+MEASURE Sales[Sum of Quantity PM Delta] = [Sum of Quantity] - [Sum of Quantity PM] 
+MEASURE Sales[Sum of Quantity PM %] = [Sum of Quantity PM Delta] / [Sum of Quantity]
+
+EVALUATE
+SUMMARIZECOLUMNS(
+    'date'[Monthly] ,
+    TREATAS({DATE(2023,1,1),DATE(2023,2,1),DATE(2023,3,1)} , 'Date'[Monthly] ) ,
+    "Sales" , VALUE([Sum of Quantity]),
+    "Sales PM" ,  VALUE([Sum of Quantity PM]),
+    "Sales PM Delta", VALUE([Sum of Quantity PM Delta]),
+    "Sales PM % " , VALUE([Sum of Quantity PM %])
+)
+
+ORDER BY [Monthly]"""),
+            # ----------------------------
+            ("Running Total", """DEFINE
+MEASURE Sales[Sum of Sales] =  SUM(Sales[sales])
+MEASURE Sales[Sum of Sales YTD] = TOTALYTD([Sum of Sales],'date'[Date])
+MEASURE Sales[Sum of Sales QTD] = TOTALQTD([Sum of Sales],'date'[Date]) 
+
+EVALUATE
+SUMMARIZECOLUMNS(
+    'Date'[Monthly],
+    TREATAS({DATE(2023,1,1)} , 'Date'[Monthly] ),
+    "Sales" , VALUE([Sum of Sales]),
+    "Sales YTD" , VALUE([Sum of Sales YTD]),
+    "Sales QTD" , VALUE([Sum of Sales QTD])
+)
+ORDER BY [Monthly] """),
+            # ----------------------------
+        ]
+
+    def to_test_suite(
+        self,
+        target_dataset: str | UUID,
+        target_workspace: Optional[str | UUID] = None,
+        master_dataset: Optional[str | UUID] = None,
+        master_workspace: Optional[str | UUID] = None,
+        data_source: Optional[str | UUID] = None,
+        data_source_workspace: Optional[str | UUID] = None,
+        data_source_type: Optional[str] = "Lakehouse",
+
+    ) -> TestSuite:
+        """
+        Wraps the predefined sales sample DAX queries into a TestSuite instance
+        based on the specified parameters.
+
+        Parameters
+        ----------
+        target_dataset : str | uuid.UUID
+            The semantic model name or ID designating the model that the 
+            test cycle should use to run the DAX queries.
+        target_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the target dataset is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        master_dataset : str | uuid.UUID, default=None
+            The master semantic model name or ID for the target_dataset. If not 
+            specified, the test cycle cannot clone the master to create the target_dataset.
+            In this case, the target_dataset must already exist.
+        master_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the master dataset is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        data_source : str | uuid.UUID, default=None
+            The name or ID of the lakehouse or other artifact that serves as the data source for the target_dataset.
+            Defaults to None which resolves to the lakehouse or warehouse referenced in the data source shared expression.
+        data_source_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the data source is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        data_source_type : str, default=Lakehouse
+            The type of the data source. Currently, the only supported type is Lakehouse.
+
+        Returns
+        -------
+        TestSuite
+            A TestSuite object with the test definitions based on the specified DAX queries.
+        """
+        return _get_test_definitions(
+            dax_queries = self.sample_queries,
+            target_dataset = target_dataset,
+            target_workspace = target_workspace,
+            master_dataset = master_dataset,
+            master_workspace = master_workspace,
+            data_source = data_source,
+            data_source_workspace = data_source_workspace,
+            data_source_type = data_source_type,
+        )
+
+
+def _get_workspace_name_and_id(
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a workspace name or ID into a Tuple of workspace name and id.
+
+    Parameters
+    ----------
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID to resolve.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of workspace name and workspace id.
+    """
+    if workspace:
+        filter_condition = urllib.parse.quote(workspace)
+        dfW = fabric.list_workspaces(
+            filter=f"name eq '{filter_condition}' or id eq '{filter_condition}'"
+        )
+        if dfW.empty:
+            workspace_name = workspace
+            workspace_id = None
+        else:
+            workspace_name = dfW.iloc[0]["Name"]
+            workspace_id = dfW.iloc[0]["Id"]
+        
+        return (workspace_name, workspace_id)
+    return (None, None)
+
+
+def _get_dataset_name_and_id(
+    dataset: Optional[str | UUID] = None,
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a dataset name or ID into a Tuple of dataset name and id.
+
+    Parameters
+    ----------
+    dataset : str | uuid.UUID, default=None
+        The dataset name or ID to resolve.
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the dataset is located.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of dataset name and dataset id.
+    """
+    if dataset:
+        dfSM = fabric.list_datasets(workspace=workspace, mode="rest")
+        dfSM = dfSM[
+            (dfSM["Dataset Name"] == dataset)
+            | (dfSM["Dataset Id"] == dataset)
+        ]
+        if dfSM.empty:
+            dataset_name = dataset
+            dataset_id = None
+        else:
+            dataset_name = dfSM.iloc[0]["Dataset Name"]
+            dataset_id = dfSM.iloc[0]["Dataset Id"]
+        
+        return (dataset_name, dataset_id)
+    return (None, None)
+
+
+def _get_lakehouse_name_and_id(
+    lakehouse: Optional[str | UUID] = None,
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a lakehouse name or ID into a Tuple of lakehouse name and id.
+
+    Parameters
+    ----------
+    lakehouse : str | uuid.UUID, default=None
+        The lakehouse name or ID to resolve.
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the lakehouse is located.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of lakehouse name and dataset id.
+    """
+    if lakehouse:
+        dfLH = fabric.list_items(workspace=workspace, type = "Lakehouse")
+        dfLH = dfLH[
+            (dfLH["Display Name"] == lakehouse)
+            | (dfLH["Id"] == lakehouse)
+        ]
+        if dfLH.empty:
+            lakehouse_name = lakehouse
+            lakehouse_id = None
+        else:
+            lakehouse_name = dfLH.iloc[0]["Display Name"]
+            lakehouse_id = dfLH.iloc[0]["Id"]
+        
+        return (lakehouse_name, lakehouse_id)
+    return (None, None)
+
+
+def _get_test_definitions(
+    dax_queries: list[str] | list[(str, str)],
+    target_dataset: str | UUID,
+    target_workspace: Optional[str | UUID] = None,
+    master_dataset: Optional[str | UUID] = None,
+    master_workspace: Optional[str | UUID] = None,
+    data_source: Optional[str | UUID] = None,
+    data_source_workspace: Optional[str | UUID] = None,
+    data_source_type: Optional[str] = "Lakehouse",
+
+) -> TestSuite:
+    """
+    Generates a TestSuite instance with test definitions based on a list of DAX queries.
+
+    Parameters
+    ----------
+    dax_queries: list[str]
+        A predefined list of DAX queries.
+        This can be a simple list of query expressions,
+        or a list of (Query_Id, Query_Text) tuples.
+    target_dataset : str | uuid.UUID
+        The semantic model name or ID designating the model that the 
+        test cycle should use to run the DAX queries.
+    target_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the target dataset is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    master_dataset : str | uuid.UUID, default=None
+        The master semantic model name or ID for the target_dataset. If not 
+        specified, the test cycle cannot clone the master to create the target_dataset.
+        In this case, the target_dataset must already exist.
+    master_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the master dataset is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    data_source : str | uuid.UUID, default=None
+        The name or ID of the lakehouse or other artifact that serves as the data source for the target_dataset.
+        Defaults to None which resolves to the lakehouse or warehouse referenced in the data source shared expression.
+    data_source_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the data source is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    data_source_type : str, default=Lakehouse
+        The type of the data source. Currently, the only supported type is Lakehouse.
+
+    Returns
+    -------
+    TestSuite
+        A TestSuite object with the test definitions based on the specified DAX queries.
+    """
+    # Parameter validation
+    if data_source_type != "Lakehouse":
+        raise ValueError("Unrecognized data source type specified. The only valid option for now is 'Lakehouse'.")
+
+    (target_workspace_name, target_workspace_id) = _get_workspace_name_and_id(target_workspace)
+    (master_workspace_name, master_workspace_id) = _get_workspace_name_and_id(master_workspace)
+    (data_source_workspace_name, data_source_workspace_id) = _get_workspace_name_and_id(data_source_workspace)
+
+    (target_dataset_name, target_dataset_id) = _get_dataset_name_and_id(dataset=target_dataset, workspace=target_workspace_id)
+    (master_dataset_name, master_dataset_id) = _get_dataset_name_and_id(dataset=master_dataset, workspace=master_workspace_id)
+
+    (data_source_name, data_source_id) = _get_lakehouse_name_and_id(lakehouse=data_source, workspace=data_source_workspace_id)
+
+    test_suite = TestSuite()
+    for i in range(len(dax_queries)):
+        q = dax_queries[i]
+        if isinstance(q, str):          
+            test_suite.add_test_definition(
+                TestDefinition(
+                    QueryId=f"Q{i}", 
+                    QueryText=q, 
+                    MasterWorkspace = master_workspace_name,
+                    MasterDataset = master_dataset_name,
+                    TargetWorkspace = target_workspace_name,
+                    TargetDataset= target_dataset_name,
+                    DatasourceName = data_source_name,
+                    DatasourceWorkspace = data_source_workspace_name,
+                    DatasourceType = data_source_type))
+        elif isinstance(q, tuple):
+            test_suite.add_test_definition(
+                TestDefinition(
+                    QueryId=q[0], 
+                    QueryText=q[1], 
+                    MasterWorkspace = master_workspace_name,
+                    MasterDataset = master_dataset_name,
+                    TargetWorkspace = target_workspace_name,
+                    TargetDataset= target_dataset_name,
+                    DatasourceName = data_source_name,
+                    DatasourceWorkspace = data_source_workspace_name,
+                    DatasourceType = data_source_type))
+            
+    return test_suite
+
