@@ -32,11 +32,14 @@ from sempy_labs.perf_lab._simulated_etl import (
     delete_reinsert_rows
 )
 
+from sempy_labs.perf_lab._sales_sample import (
+    SalesLakehouseConfig,
+    provision_sales_tables,
+    apply_sales_metadata,
+)
+
 __all__ = [
-    "simulate_etl",
-    "delete_reinsert_rows",
-    "get_storage_table_column_segments",
-    "get_source_tables",
+    "SalesLakehouseConfig",
     "TestDefinition",
     "TestSuite",
     "ExecutionTracker",
@@ -52,4 +55,10 @@ __all__ = [
     "provision_semantic_model",
     "deprovision_semantic_models",
     "delete_semantic_model",
+    "provision_sales_tables",
+    "apply_sales_metadata",
+    "simulate_etl",
+    "delete_reinsert_rows",
+    "get_storage_table_column_segments",
+    "get_source_tables",
     ]

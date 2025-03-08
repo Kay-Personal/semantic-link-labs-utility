@@ -5,6 +5,7 @@ import sempy.fabric as fabric
 from sempy.fabric.exceptions import FabricHTTPException
 
 import sempy_labs._icons as icons
+from sempy_labs.lakehouse._get_lakehouse_tables import get_lakehouse_tables
 from sempy_labs.perf_lab._test_suite import TestSuite
 from sempy_labs._helper_functions import (
     _get_or_create_workspace,
@@ -504,3 +505,48 @@ def provision_test_semantic_models(
             )
         else:
             print(f"{icons.green_dot} The test semantic model '{target_dataset}' already exists in the workspace '{target_workspace_name}'.")
+
+            
+def _ensure_table(
+        table_name: str,
+        workspace_id: UUID,
+        lakehouse_id: UUID,
+        timeout: Optional[int] = 60,
+)->bool:
+    """
+    Checks that a table exists in the specified lakehouse.
+
+    Parameters
+    ----------
+    table_name : str
+        The name of the table to look for.
+    workspace_id : uuid.UUID
+        The Fabric workspace ID where the lakehouse is located.
+    lakehouse_id : uuid.UUID
+        The ID of the lakehouse where the delta tables should be added.
+    timeout: int, default=30
+        The max duration to check for the table.
+
+    Returns
+    -------
+    bool
+        True if the specified table was detected.
+        False if the timeout expired before the table was detected.
+    """
+    import time
+
+    time_in_secs = timeout
+    step_size = 5
+    while time_in_secs > 0:
+        tables_df = get_lakehouse_tables(
+            workspace=workspace_id, 
+            lakehouse=lakehouse_id
+        )
+
+        if tables_df['Table Name'].eq(table_name).any():
+            return True
+        else:
+            time_in_secs -= step_size
+            time.sleep(step_size)         
+    
+    return False
