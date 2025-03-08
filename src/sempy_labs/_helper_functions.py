@@ -1467,6 +1467,55 @@ def _is_valid_uuid(
     except ValueError:
         return False
 
+def _is_valid_date(
+        date_str: str, 
+        date_format: str ="%Y%m%d"
+)->bool:
+    """
+    Validates if a string is a valid date.
+
+    Parameters
+    ----------
+    date_str : str
+        The date string to be validated.
+    date_format : str
+        The date format of the date string to be validated.
+
+    Returns
+    -------
+    bool
+        Boolean that indicates if the string is a date or not.
+    """
+    from datetime import datetime
+
+    try:
+        datetime.strptime(date_str, date_format)
+        return True
+    except ValueError:
+        return False
+
+def is_valid_integer(
+        value: object
+) -> bool:
+    """
+    Validates if a value is an integer.
+
+    Parameters
+    ----------
+    value : object
+        The value to be validated.
+
+    Returns
+    -------
+    bool
+        Boolean that indicates if the value is an integer.
+    """
+    try:
+        int(value)
+        return True
+    except ValueError:
+        return False
+
 
 def _get_fabric_context_setting(name: str):
 

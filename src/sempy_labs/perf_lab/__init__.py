@@ -27,7 +27,14 @@ from sempy_labs.perf_lab._diagnostics import (
     get_source_tables
 )
 
+from sempy_labs.perf_lab._simulated_etl import (
+    simulate_etl,
+    delete_reinsert_rows
+)
+
 __all__ = [
+    "simulate_etl",
+    "delete_reinsert_rows",
     "get_storage_table_column_segments",
     "get_source_tables",
     "TestDefinition",
