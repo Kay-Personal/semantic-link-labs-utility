@@ -1,7 +1,11 @@
 from uuid import UUID
-from typing import Optional, Tuple
+from typing import Optional
+import sempy.fabric as fabric
 
+import sempy_labs._icons as icons
 from sempy_labs._helper_functions import (
+    resolve_workspace_name_and_id,
+    resolve_lakehouse_name_and_id,
     save_as_delta_table,
     _read_delta_table
 )
@@ -197,6 +201,145 @@ class TestSuite:
             raise ValueError("Can only merge with another TestSuite instance")
         self.test_definitions.extend(other.test_definitions)
 
+    def from_trace_events(
+            self,
+            master_dataset: str | UUID,
+            target_dataset_prefix: str | UUID,
+            query_id_prefix: Optional[str] = "Query",
+            master_workspace: Optional[str | UUID] = None,
+            target_workspace: Optional[str | UUID] = None,
+            data_source: Optional[str | UUID] = None,
+            data_source_workspace: Optional[str | UUID] = None,
+            data_source_type: Optional[str] = "Lakehouse",
+            timeout: Optional[int] = 300,
+        ):
+        """
+        Generates test definitions using the specified input parameters and captured DAX query trace events.
+
+        Parameters
+        ----------
+        master_dataset : str | uuid.UUID, default=None
+            The master semantic model name or ID. 
+            This is the semantic model for which the query trace events are captured.
+        target_dataset_prefix : str | uuid.UUID
+            The semantic model name or ID designating the model that the 
+            test cycle should use to run a DAX query. This function generates
+            a unique name for each unique DAX query in the form of {target_dataset_prefix}_{sequence_number}
+        query_id_prefix : str, default="Query"
+            The prefix for the query id to identify each DAX query. The generated query id
+            has the form {query_id_prefix}{sequence_number}.
+        master_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the master dataset is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        target_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the target dataset is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        data_source : str | uuid.UUID, default=None
+            The name or ID of the lakehouse or other artifact that serves as the data source for the target_dataset.
+            Defaults to None which resolves to the lakehouse attached to this notebook.
+            If no lakehouse is attached to this notebook, you must provide the data_source parameter.
+        data_source_workspace : str | uuid.UUID, default=None
+            The Fabric workspace name or ID where the data source is located.
+            Defaults to None which resolves to the workspace of the attached lakehouse,
+            or if no lakehouse attached, resolves to the workspace of the notebook.
+        data_source_type : str, default=Lakehouse
+            The type of the data source. Currently, the only supported type is Lakehouse.
+        timeout : int, default=30
+            The max time duration to capture trace events after execution of the DAX queries.
+        """
+        import warnings
+        import time
+        from tqdm.auto import tqdm
+        from sempy_labs.perf_lab._lab_infrastructure import (
+            _get_workspace_name_and_id,
+            _get_dataset_name_and_id,
+            _get_lakehouse_name_and_id
+        )
+
+        # Parameter validation
+        if data_source_type != "Lakehouse":
+            raise ValueError("Unrecognized data source type specified. The only valid option for now is 'Lakehouse'.")
+        if not master_dataset:
+            raise ValueError("The master_dataset must be specified. The master dataset is required to capture trace events.")
+        if data_source_workspace and not data_source:
+            raise ValueError("The data_source must be specified if a data_source_workspace was provided.")
+
+        if not master_workspace:
+            (master_workspace_name, master_workspace_id) = resolve_workspace_name_and_id()
+        else:
+            (master_workspace_name, master_workspace_id) = _get_workspace_name_and_id(master_workspace)
+
+        if not target_workspace:
+            (target_workspace_name, target_workspace_id) = resolve_workspace_name_and_id()
+        else:
+            (target_workspace_name, target_workspace_id) = _get_workspace_name_and_id(target_workspace)
+
+        if not data_source and not data_source_workspace:
+            (data_source_workspace_name, data_source_workspace_id) = resolve_workspace_name_and_id()
+            (data_source_name, data_source_id) = resolve_lakehouse_name_and_id(workspace=data_source_workspace_id)
+        elif data_source and not data_source_workspace:
+            (data_source_workspace_name, data_source_workspace_id) = resolve_workspace_name_and_id()
+            (data_source_name, data_source_id) = _get_lakehouse_name_and_id(lakehouse=data_source, workspace=data_source_workspace_id)
+        else:
+            (data_source_workspace_name, data_source_workspace_id) = _get_workspace_name_and_id(data_source_workspace)
+            (data_source_name, data_source_id) = _get_lakehouse_name_and_id(lakehouse=data_source, workspace=data_source_workspace_id)
+
+        (master_dataset_name, master_dataset_id) = _get_dataset_name_and_id(dataset=master_dataset, workspace=master_workspace_id)
+
+        warnings.filterwarnings("ignore", category=UserWarning)
+
+        event_schema = {
+            "QueryBegin": ["TextData"],
+        }
+        with fabric.create_trace_connection(dataset=master_dataset_id, workspace=master_workspace_id) as trace_connection:
+            with trace_connection.create_trace(event_schema) as trace:
+                trace.start()
+                # Loop until the timeout expires or until a query with '{"Stop"}' in the query text is received.
+                time_in_secs = timeout
+                step_size = 1
+                print(f"{icons.in_progress} Entering a trace loop for up to {time_in_secs} seconds to capture DAX queries executed against the '{master_dataset_name}' semantic model. Execute 'EVALUATE {{\"Stop\"}}' to exit the trace loop.")
+                
+                # Initialize tqdm progress bar with green bar color
+                with tqdm(total=time_in_secs, desc="Capturing DAX queries (0 captured)", colour="green") as pbar:
+                    while time_in_secs > 0:
+                        df = trace.get_trace_logs()
+                        if not df.empty:
+                            pbar.set_description(f"Capturing DAX queries ({len(df)} captured)")
+                            for _, row in df.iterrows():
+                                if row['Text Data'].find("""{"Stop"}""") != -1:                            
+                                    time_in_secs = 0
+                            
+                        if time_in_secs > 0:
+                            time.sleep(step_size)
+                            time_in_secs -= step_size                 
+                            pbar.update(step_size)                     
+                    
+                df = trace.stop()
+                if not df.empty:
+                    row_count = len(df[~df['Text Data'].str.contains('{"Stop"}')])
+                    print(f"{icons.green_dot} Trace loop exited. Trace stopped. {row_count} DAX queries captured.")
+                else:
+                    print(f"{icons.yellow_dot} Trace loop exited. Trace stopped. 0 DAX queries captured.")
+
+                i = 0
+                for _, row in df.iterrows():
+                    if row['Text Data'].find("""{"Stop"}""") == -1:
+                        i += 1
+                        self.add_test_definition(
+                            TestDefinition(
+                                QueryId=f"{query_id_prefix}{i}", 
+                                QueryText=row['Text Data'].replace("\n\n", "\n"), 
+                                MasterWorkspace = master_workspace_name,
+                                MasterDataset = master_dataset_name,
+                                TargetWorkspace = target_workspace_name,
+                                TargetDataset= f"{target_dataset_prefix}_{i}",
+                                DatasourceName = data_source_name,
+                                DatasourceWorkspace = data_source_workspace_name,
+                                DatasourceType = data_source_type))
+
+
 
 def _get_test_definitions(
     dax_queries: list[str] | list[(str, str)],
@@ -254,7 +397,7 @@ def _get_test_definitions(
         _get_dataset_name_and_id,
         _get_lakehouse_name_and_id
     )
-    
+
     # Parameter validation
     if data_source_type != "Lakehouse":
         raise ValueError("Unrecognized data source type specified. The only valid option for now is 'Lakehouse'.")
