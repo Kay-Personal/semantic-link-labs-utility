@@ -1,6 +1,5 @@
 from uuid import UUID
-from typing import Optional
-import sempy_labs._icons as icons
+from typing import Optional, Tuple
 
 from sempy_labs._helper_functions import (
     save_as_delta_table,
@@ -197,3 +196,104 @@ class TestSuite:
         if not isinstance(other, TestSuite):
             raise ValueError("Can only merge with another TestSuite instance")
         self.test_definitions.extend(other.test_definitions)
+
+
+def _get_test_definitions(
+    dax_queries: list[str] | list[(str, str)],
+    target_dataset: str | UUID,
+    target_workspace: Optional[str | UUID] = None,
+    master_dataset: Optional[str | UUID] = None,
+    master_workspace: Optional[str | UUID] = None,
+    data_source: Optional[str | UUID] = None,
+    data_source_workspace: Optional[str | UUID] = None,
+    data_source_type: Optional[str] = "Lakehouse",
+
+) -> TestSuite:
+    """
+    Generates a TestSuite instance with test definitions based on a list of DAX queries
+    and other provided information.
+
+    Parameters
+    ----------
+    dax_queries: list[str]
+        A predefined list of DAX queries.
+        This can be a simple list of query expressions,
+        or a list of (Query_Id, Query_Text) tuples.
+    target_dataset : str | uuid.UUID
+        The semantic model name or ID designating the model that the 
+        test cycle should use to run the DAX queries.
+    target_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the target dataset is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    master_dataset : str | uuid.UUID, default=None
+        The master semantic model name or ID for the target_dataset. If not 
+        specified, the test cycle cannot clone the master to create the target_dataset.
+        In this case, the target_dataset must already exist.
+    master_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the master dataset is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    data_source : str | uuid.UUID, default=None
+        The name or ID of the lakehouse or other artifact that serves as the data source for the target_dataset.
+        Defaults to None which resolves to the lakehouse or warehouse referenced in the data source shared expression.
+    data_source_workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the data source is located.
+        Defaults to None which resolves to the workspace of the attached lakehouse
+        or if no lakehouse attached, resolves to the workspace of the notebook.
+    data_source_type : str, default=Lakehouse
+        The type of the data source. Currently, the only supported type is Lakehouse.
+
+    Returns
+    -------
+    TestSuite
+        A TestSuite object with the test definitions based on the specified DAX queries.
+    """
+    from sempy_labs.perf_lab._lab_infrastructure import (
+        _get_workspace_name_and_id,
+        _get_dataset_name_and_id,
+        _get_lakehouse_name_and_id
+    )
+    
+    # Parameter validation
+    if data_source_type != "Lakehouse":
+        raise ValueError("Unrecognized data source type specified. The only valid option for now is 'Lakehouse'.")
+
+    (target_workspace_name, target_workspace_id) = _get_workspace_name_and_id(target_workspace)
+    (master_workspace_name, master_workspace_id) = _get_workspace_name_and_id(master_workspace)
+    (data_source_workspace_name, data_source_workspace_id) = _get_workspace_name_and_id(data_source_workspace)
+
+    (target_dataset_name, target_dataset_id) = _get_dataset_name_and_id(dataset=target_dataset, workspace=target_workspace_id)
+    (master_dataset_name, master_dataset_id) = _get_dataset_name_and_id(dataset=master_dataset, workspace=master_workspace_id)
+
+    (data_source_name, data_source_id) = _get_lakehouse_name_and_id(lakehouse=data_source, workspace=data_source_workspace_id)
+
+    test_suite = TestSuite()
+    for i in range(len(dax_queries)):
+        q = dax_queries[i]
+        if isinstance(q, str):          
+            test_suite.add_test_definition(
+                TestDefinition(
+                    QueryId=f"Q{i}", 
+                    QueryText=q, 
+                    MasterWorkspace = master_workspace_name,
+                    MasterDataset = master_dataset_name,
+                    TargetWorkspace = target_workspace_name,
+                    TargetDataset= target_dataset_name,
+                    DatasourceName = data_source_name,
+                    DatasourceWorkspace = data_source_workspace_name,
+                    DatasourceType = data_source_type))
+        elif isinstance(q, tuple):
+            test_suite.add_test_definition(
+                TestDefinition(
+                    QueryId=q[0], 
+                    QueryText=q[1], 
+                    MasterWorkspace = master_workspace_name,
+                    MasterDataset = master_dataset_name,
+                    TargetWorkspace = target_workspace_name,
+                    TargetDataset= target_dataset_name,
+                    DatasourceName = data_source_name,
+                    DatasourceWorkspace = data_source_workspace_name,
+                    DatasourceType = data_source_type))
+            
+    return test_suite

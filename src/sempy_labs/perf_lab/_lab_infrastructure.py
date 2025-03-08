@@ -1,3 +1,4 @@
+import urllib.parse
 from uuid import UUID
 from typing import Optional, Tuple, Callable, List
 
@@ -550,3 +551,108 @@ def _ensure_table(
             time.sleep(step_size)         
     
     return False
+
+
+def _get_workspace_name_and_id(
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a workspace name or ID into a Tuple of workspace name and id.
+
+    Parameters
+    ----------
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID to resolve.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of workspace name and workspace id.
+    """
+    if workspace:
+        filter_condition = urllib.parse.quote(workspace)
+        dfW = fabric.list_workspaces(
+            filter=f"name eq '{filter_condition}' or id eq '{filter_condition}'"
+        )
+        if dfW.empty:
+            workspace_name = workspace
+            workspace_id = None
+        else:
+            workspace_name = dfW.iloc[0]["Name"]
+            workspace_id = dfW.iloc[0]["Id"]
+        
+        return (workspace_name, workspace_id)
+    return (None, None)
+
+
+def _get_dataset_name_and_id(
+    dataset: Optional[str | UUID] = None,
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a dataset name or ID into a Tuple of dataset name and id.
+
+    Parameters
+    ----------
+    dataset : str | uuid.UUID, default=None
+        The dataset name or ID to resolve.
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the dataset is located.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of dataset name and dataset id.
+    """
+    if dataset:
+        dfSM = fabric.list_datasets(workspace=workspace, mode="rest")
+        dfSM = dfSM[
+            (dfSM["Dataset Name"] == dataset)
+            | (dfSM["Dataset Id"] == dataset)
+        ]
+        if dfSM.empty:
+            dataset_name = dataset
+            dataset_id = None
+        else:
+            dataset_name = dfSM.iloc[0]["Dataset Name"]
+            dataset_id = dfSM.iloc[0]["Dataset Id"]
+        
+        return (dataset_name, dataset_id)
+    return (None, None)
+
+
+def _get_lakehouse_name_and_id(
+    lakehouse: Optional[str | UUID] = None,
+    workspace: Optional[str | UUID] = None,
+) -> Tuple[str, UUID]:
+    """
+    Resolves a lakehouse name or ID into a Tuple of lakehouse name and id.
+
+    Parameters
+    ----------
+    lakehouse : str | uuid.UUID, default=None
+        The lakehouse name or ID to resolve.
+    workspace : str | uuid.UUID, default=None
+        The Fabric workspace name or ID where the lakehouse is located.
+
+    Returns
+    -------
+    Tuple[str, uuid.UUID]
+        A tuple of lakehouse name and dataset id.
+    """
+    if lakehouse:
+        dfLH = fabric.list_items(workspace=workspace, type = "Lakehouse")
+        dfLH = dfLH[
+            (dfLH["Display Name"] == lakehouse)
+            | (dfLH["Id"] == lakehouse)
+        ]
+        if dfLH.empty:
+            lakehouse_name = lakehouse
+            lakehouse_id = None
+        else:
+            lakehouse_name = dfLH.iloc[0]["Display Name"]
+            lakehouse_id = dfLH.iloc[0]["Id"]
+        
+        return (lakehouse_name, lakehouse_id)
+    return (None, None)
+
