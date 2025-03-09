@@ -39,7 +39,13 @@ from sempy_labs.perf_lab._sales_sample import (
     apply_sales_metadata,
 )
 
+from sempy_labs.perf_lab._adventure_works_dw import (
+    AdventureWorksConfig,
+    provision_adventureworks_dw_tables,
+)
+
 __all__ = [
+    "AdventureWorksConfig",
     "SalesLakehouseConfig",
     "SalesSampleQueries",
     "TestDefinition",
@@ -57,6 +63,7 @@ __all__ = [
     "provision_semantic_model",
     "deprovision_semantic_models",
     "delete_semantic_model",
+    "provision_adventureworks_dw_tables",
     "provision_sales_tables",
     "apply_sales_metadata",
     "simulate_etl",
