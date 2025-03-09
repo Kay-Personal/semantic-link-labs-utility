@@ -10,7 +10,7 @@ from dateutil.relativedelta import relativedelta
 from typing import Optional, Union
 from uuid import UUID
 import random
-
+from sempy_labs.perf_lab._lab_infrastructure import _ensure_table
 from sempy_labs._helper_functions import (
     _read_delta_table, 
     save_as_delta_table,
@@ -113,6 +113,9 @@ def provision_adventureworks_dw_tables(
     # The tables are related to each other through various key columns. It is therefore
     # important to generate the tables in a specfic order to ensure referential integrity.
 
+    # Track all created tables to ensure they exist when exiting this function.
+    tables_created = []
+
     # The DimDate table is first.
     date_df = _get_dimdate_data(workspace_id, lakehouse_id, 
                              table_properties["start_date"], 
@@ -125,6 +128,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("DimDate")
 
     dim_tables = _get_dim_tables(workspace_id, lakehouse_id, table_properties["csv_download_url"])
     for table_name, table_df in dim_tables.items():
@@ -138,7 +142,8 @@ def provision_adventureworks_dw_tables(
                 write_mode = 'overwrite',
                 lakehouse=lakehouse_id,
                 workspace=workspace_id,
-            )
+            )        
+        tables_created.append(table_name)
     
     call_center_df = _get_fact_call_center_data(workspace_id, lakehouse_id, date_df)
     save_as_delta_table(
@@ -148,6 +153,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactCallCenter")
 
     fact_currency_rates_df = _get_fact_currencies(workspace_id, lakehouse_id, date_df, dim_tables["DimCurrency"])
     save_as_delta_table(
@@ -157,6 +163,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactCurrencyRate")
 
     fact_finance_df = _get_fact_finance_data(workspace_id, lakehouse_id, 
                         date_df,
@@ -171,6 +178,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactFinance")
     
     sales_quota_df = _get_fact_sales_quotas(workspace_id, lakehouse_id, 
                         date_df, dim_tables["DimEmployee"], table_properties["sales_quota_count"])
@@ -181,6 +189,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactSalesQuota")
 
     survey_response_df = _get_survey_responses(workspace_id, lakehouse_id, 
                         date_df,
@@ -195,6 +204,7 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactSurveyResponse")
 
     sales_tables = _get_fact_sales_tables(workspace_id, lakehouse_id, 
             dim_date_df = date_df,
@@ -215,6 +225,7 @@ def provision_adventureworks_dw_tables(
                 lakehouse=lakehouse_id,
                 workspace=workspace_id,
             )
+        tables_created.append(table_name)
         
     prod_inventory_df = _get_fact_product_inventory(workspace_id, lakehouse_id, 
             internet_sales_quantities_df = sales_tables["FactInternetSales"],
@@ -226,6 +237,12 @@ def provision_adventureworks_dw_tables(
             lakehouse=lakehouse_id,
             workspace=workspace_id,
         )
+    tables_created.append("FactProductInventory")
+
+    # Make sure the tables exist in the lakehouse.
+    for table in tables_created:
+        if not _ensure_table(table, workspace_id, lakehouse_id):
+            print(f"{icons.yellow_dot} The Delta table '{table}' was created but has not yet appeared in the lakehouse.")
 
 
 def _get_dimdate_data(
@@ -2035,5 +2052,4 @@ def _get_fact_product_inventory(
             col("TotalOrderQuantity").alias("UnitsOut"),
             col("QuantityOnHand").alias("UnitsBalance"),
         )
-
 
