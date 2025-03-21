@@ -23,13 +23,17 @@ from sempy_labs.perf_lab._lab_infrastructure import (
 )
 
 from sempy_labs.perf_lab._diagnostics import (
+    analyze_delta_tables,
     get_storage_table_column_segments,
-    get_source_tables
+    get_source_tables,
+    _filter_by_prefix,
 )
 
 __all__ = [
+    "analyze_delta_tables",
     "get_storage_table_column_segments",
     "get_source_tables",
+    "_filter_by_prefix",
     "TestDefinition",
     "TestSuite",
     "ExecutionTracker",
