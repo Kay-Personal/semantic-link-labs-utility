@@ -1,14 +1,49 @@
+import pandas as pd
 import urllib.parse
+from uuid import UUID
 import sempy.fabric as fabric
 import sempy_labs._icons as icons
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict
 from sempy_labs.perf_lab._test_suite import TestSuite
 from sempy_labs.perf_lab._test_cycle import refresh_test_models
 from sempy_labs._helper_functions import _create_spark_session
 from sempy_labs.lakehouse import get_lakehouse_tables
 from sempy_labs.tom import connect_semantic_model
+from sempy_labs._delta_analyzer import delta_analyzer, get_delta_table_history
 
 FilterCallback = Callable[[str, str, dict], bool]
+
+def _filter_by_prefix(
+    table_name: str, 
+    source_table_name: str, 
+    filter_properties: Optional[dict] = None
+) -> bool:
+    """
+    A sample implmentation of a FilterCallback function.
+    Returns a boolean to indicate if the table info should be included in the source table list (True) or not (False).
+
+    Parameters
+    ----------
+    table_name : str
+        The name of the table in a semantic model. This sample function doesn't use this parameter, but it still needs to be present.
+    source_table_name : str
+        The name of the table in a data source.
+    filter_properties: dict, default=None
+        An arbirary dictionary of key/value pairs that the provision_perf_lab_lakehouse function passes to the table_generator function.
+        The _filter_by_prefix sample function expects to find a 'Prefix' key in the filter_properties.
+
+    Returns
+    -------
+    bool
+        Indicates if the table should be included (True) or ignored (False).
+    """
+
+    if filter_properties is None:
+        return False
+
+    return source_table_name.startswith(
+        filter_properties["Prefix"])
+
 
 def get_source_tables(
     test_suite: TestSuite,
@@ -248,6 +283,10 @@ def get_storage_table_column_segments(
                 .withColumn("[TESTRUNTIMESTAMP]", lit(row["TestRunTimestamp"]))
             )
 
+            # Remove the [ ] brackets from the column names
+            clean_columns = [col.replace("[", "").replace("]", "") for col in dax_df.columns]
+            dax_df = dax_df.toDF(*clean_columns)
+
             # If results_df is None, initialize it with the first DataFrame
             if results_df is None:
                 results_df = dax_df
@@ -256,3 +295,70 @@ def get_storage_table_column_segments(
                 results_df = results_df.union(dax_df)
 
     return results_df
+
+
+def analyze_delta_tables(
+    tables_info: 'pyspark.sql.DataFrame',
+    approx_distinct_count: bool = True,
+    column_stats: bool = True,
+    skip_cardinality: bool = True,
+) -> Dict[str, Dict[str, pd.DataFrame]]:
+    """
+    Analyzes a delta table and returns the results in a dictionary of dictionaries containing a set of 6 dataframes for each table.
+
+    The 6 dataframes returned by this function are:
+
+    * Summary
+    * Parquet Files
+    * Row Groups
+    * Column Chunks
+    * Columns
+    * History
+
+    Read more about Delta Analyzer `here <https://github.com/microsoft/Analysis-Services/tree/master/DeltaAnalyzer>`_.
+
+    Parameters
+    ----------
+    tables_info : pyspark.sql.DataFrame
+        A PySpark dataframe with information about the model tables and source tables, usually obtained by using the get_source_tables() function.
+    approx_distinct_count: bool, default=True
+        If True, uses approx_count_distinct to calculate the cardinality of each column. If False, uses COUNT(DISTINCT) instead.
+    column_stats : bool, default=True
+        If True, collects data about column chunks and columns. If False, skips that step and only returns the other 3 dataframes.
+    skip_cardinality : bool, default=True
+        If True, skips the cardinality calculation for each column. If False, calculates the cardinality for each column.
+
+    Returns
+    -------
+    Dict[str, Dict[str, pandas.DataFrame]]
+        A dictionary of dictionaries containing pandas dataframes with the Delta Analyzer results for each table.
+    """
+
+    results: Dict[str, Dict[str, pd.DataFrame]] = {}
+
+    delta_tables = tables_info.where(tables_info["DatasourceType"] == 'Lakehouse').dropDuplicates(['DatasourceWorkspace', 'SourceTableName', 'DatasourceName'])
+    for table in delta_tables.collect():
+        table_name = table['SourceTableName']
+        lakehouse_name = table['DatasourceName']
+        workspace_name = table['DatasourceWorkspace']
+
+        print(f"{icons.green_dot} Analyzing Delta table '{table['SourceTableName']}' in Lakehouse '{table['DatasourceName']}'.")
+
+        da_results = delta_analyzer(
+            table_name = table_name,
+            lakehouse = lakehouse_name,
+            workspace = workspace_name,
+            approx_distinct_count = approx_distinct_count,
+            column_stats = column_stats,
+            skip_cardinality = skip_cardinality,
+        )
+
+        da_results['History'] = get_delta_table_history(
+            table_name = table_name,
+            lakehouse = lakehouse_name,
+            workspace = workspace_name,
+        )
+        
+        results[table_name] = da_results
+    
+    return results
