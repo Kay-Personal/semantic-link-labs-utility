@@ -182,7 +182,7 @@ def resolve_report_name(report_id: UUID, workspace: Optional[str | UUID] = None)
         The name of the Power BI report.
     """
 
-    return resolve_item_name(item_id=report_id, type="Report", workspace=workspace)
+    return resolve_item_name(item_id=report_id, workspace=workspace)
 
 
 def delete_item(
@@ -468,9 +468,7 @@ def resolve_dataset_name(
         The name of the semantic model.
     """
 
-    return resolve_item_name(
-        item_id=dataset_id, type="SemanticModel", workspace=workspace
-    )
+    return resolve_item_name(item_id=dataset_id, workspace=workspace)
 
 
 def resolve_lakehouse_name(
@@ -502,9 +500,7 @@ def resolve_lakehouse_name(
                 f"{icons.red_dot} Cannot resolve a lakehouse. Please enter a valid lakehouse or make sure a lakehouse is attached to the notebook."
             )
 
-    return resolve_item_name(
-        item_id=lakehouse_id, type="Lakehouse", workspace=workspace
-    )
+    return resolve_item_name(item_id=lakehouse_id, workspace=workspace)
 
 
 def resolve_lakehouse_id(
@@ -1045,12 +1041,13 @@ def resolve_workspace_capacity(
     Tuple[uuid.UUID, str]
         capacity Id; capacity came.
     """
+    from sempy_labs._capacities import list_capacities
 
     (workspace_name, workspace_id) = resolve_workspace_name_and_id(workspace)
     filter_condition = urllib.parse.quote(workspace_id)
     dfW = fabric.list_workspaces(filter=f"id eq '{filter_condition}'")
     capacity_id = dfW["Capacity Id"].iloc[0]
-    dfC = fabric.list_capacities()
+    dfC = list_capacities()
     dfC_filt = dfC[dfC["Id"] == capacity_id]
     if len(dfC_filt) == 1:
         capacity_name = dfC_filt["Display Name"].iloc[0]
@@ -1108,8 +1105,10 @@ def get_capacity_name(workspace: Optional[str | UUID] = None) -> str:
         The capacity name.
     """
 
+    from sempy_labs._capacities import list_capacities
+
     capacity_id = get_capacity_id(workspace)
-    dfC = fabric.list_capacities()
+    dfC = list_capacities()
     dfC_filt = dfC[dfC["Id"] == capacity_id]
     if dfC_filt.empty:
         raise ValueError(
@@ -1135,11 +1134,12 @@ def resolve_capacity_name(capacity_id: Optional[UUID] = None) -> str:
     str
         The capacity name.
     """
+    from sempy_labs._capacities import list_capacities
 
     if capacity_id is None:
         return get_capacity_name()
 
-    dfC = fabric.list_capacities()
+    dfC = list_capacities()
     dfC_filt = dfC[dfC["Id"] == capacity_id]
 
     if dfC_filt.empty:
@@ -1166,6 +1166,7 @@ def resolve_capacity_id(capacity: Optional[str | UUID] = None, **kwargs) -> UUID
     uuid.UUID
         The capacity Id.
     """
+    from sempy_labs._capacities import list_capacities
 
     if "capacity_name" in kwargs:
         capacity = kwargs["capacity_name"]
@@ -1178,7 +1179,7 @@ def resolve_capacity_id(capacity: Optional[str | UUID] = None, **kwargs) -> UUID
     if _is_valid_uuid(capacity):
         return capacity
 
-    dfC = fabric.list_capacities()
+    dfC = list_capacities()
     dfC_filt = dfC[dfC["Display Name"] == capacity]
 
     if dfC_filt.empty:
@@ -1305,10 +1306,8 @@ class FabricTokenCredential(TokenCredential):
 
         import notebookutils
 
-        token = notebookutils.credentials.getToken(scopes)
-        access_token = AccessToken(token, 0)
-
-        return access_token
+        token = notebookutils.credentials.getToken("storage")
+        return AccessToken(token, 0)
 
 
 def _get_adls_client(account_name):
@@ -1317,11 +1316,21 @@ def _get_adls_client(account_name):
 
     account_url = f"https://{account_name}.dfs.core.windows.net"
 
-    service_client = DataLakeServiceClient(
-        account_url, credential=FabricTokenCredential()
-    )
+    return DataLakeServiceClient(account_url, credential=FabricTokenCredential())
 
-    return service_client
+
+def _get_blob_client(workspace_id: UUID, item_id: UUID):
+
+    from azure.storage.blob import BlobServiceClient
+
+    endpoint = _get_fabric_context_setting(name="trident.onelake.endpoint").replace(
+        ".dfs.", ".blob."
+    )
+    url = f"https://{endpoint}/{workspace_id}/{item_id}"
+
+    # account_url = f"https://{account_name}.blob.core.windows.net"
+
+    return BlobServiceClient(url, credential=FabricTokenCredential())
 
 
 def resolve_warehouse_id(
@@ -2051,3 +2060,26 @@ def _get_or_create_warehouse(
     )
 
     return (warehouse, warehouse_id)
+
+
+def _xml_to_dict(element):
+    data = {element.tag: {} if element.attrib else None}
+    children = list(element)
+    if children:
+        temp_dict = {}
+        for child in children:
+            child_dict = _xml_to_dict(child)
+            for key, value in child_dict.items():
+                if key in temp_dict:
+                    if isinstance(temp_dict[key], list):
+                        temp_dict[key].append(value)
+                    else:
+                        temp_dict[key] = [temp_dict[key], value]
+                else:
+                    temp_dict[key] = value
+        data[element.tag] = temp_dict
+    else:
+        data[element.tag] = (
+            element.text.strip() if element.text and element.text.strip() else None
+        )
+    return data
