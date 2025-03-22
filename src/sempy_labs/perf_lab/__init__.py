@@ -74,8 +74,4 @@ __all__ = [
     "provision_adventureworks_dw_tables",
     "provision_sales_tables",
     "apply_sales_metadata",
-    "simulate_etl",
-    "delete_reinsert_rows",
-    "get_storage_table_column_segments",
-    "get_source_tables",
     ]
