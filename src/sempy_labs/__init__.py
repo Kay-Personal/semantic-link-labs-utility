@@ -1,6 +1,22 @@
+from sempy_labs._delta_analyzer_history import (
+    delta_analyzer_history,
+)
+from sempy_labs._blobs import (
+    recover_lakehouse_object,
+)
+from sempy_labs._dax_query_view import (
+    generate_dax_query_view_url,
+)
+from sempy_labs._mounted_data_factories import (
+    list_mounted_data_factories,
+    get_mounted_data_factory_definition,
+    delete_mounted_data_factory,
+)
+
 from sempy_labs._semantic_models import (
     get_semantic_model_refresh_schedule,
     enable_semantic_model_scheduled_refresh,
+    delete_semantic_model,
 )
 from sempy_labs._graphQL import (
     list_graphql_apis,
@@ -99,7 +115,7 @@ from sempy_labs._kql_querysets import (
 )
 from sempy_labs._kql_databases import (
     list_kql_databases,
-    create_kql_database,
+    # create_kql_database,
     delete_kql_database,
 )
 from sempy_labs._mirrored_warehouses import list_mirrored_warehouses
@@ -142,6 +158,7 @@ from sempy_labs._capacities import (
     create_or_update_resource_group,
     list_resource_groups,
     get_resource_group,
+    list_capacities,
 )
 from sempy_labs._spark import (
     get_spark_settings,
@@ -159,6 +176,7 @@ from sempy_labs._workspaces import (
     assign_workspace_to_capacity,
     unassign_workspace_from_capacity,
     list_workspace_role_assignments,
+    delete_workspace,
 )
 from sempy_labs._notebooks import (
     get_notebook_definition,
@@ -174,6 +192,9 @@ from sempy_labs._sql import (
 from sempy_labs._sqldatabase import (
     get_sql_database_columns,
     get_sql_database_tables,
+    create_sql_database,
+    delete_sql_database,
+    list_sql_databases,
 )
 from sempy_labs._workspace_identity import (
     provision_workspace_identity,
@@ -193,6 +214,8 @@ from sempy_labs._git import (
     connect_workspace_to_azure_dev_ops,
     connect_workspace_to_github,
     disconnect_workspace_from_git,
+    get_my_git_credentials,
+    update_my_git_credentials,
 )
 from sempy_labs._dataflows import (
     list_dataflow_storage_accounts,
@@ -226,6 +249,9 @@ from sempy_labs._generate_semantic_model import (
     update_semantic_model_from_bim,
     get_semantic_model_definition,
 )
+from sempy_labs._dashboards import (
+    list_dashboards,
+)
 from sempy_labs._list_functions import (
     list_reports_using_semantic_model,
     list_semantic_model_object_report_usage,
@@ -233,8 +259,6 @@ from sempy_labs._list_functions import (
     list_semantic_model_objects,
     list_shortcuts,
     get_object_level_security,
-    list_capacities,
-    list_dashboards,
     list_datamarts,
     list_lakehouses,
     list_sql_endpoints,
@@ -425,7 +449,7 @@ __all__ = [
     "convert_to_friendly_case",
     "list_mirrored_warehouses",
     "list_kql_databases",
-    "create_kql_database",
+    # "create_kql_database",
     "delete_kql_database",
     "create_eventhouse",
     "list_eventhouses",
@@ -525,4 +549,17 @@ __all__ = [
     "create_item_schedule_cron",
     "create_item_schedule_daily",
     "create_item_schedule_weekly",
+    "get_my_git_credentials",
+    "update_my_git_credentials",
+    "list_mounted_data_factories",
+    "get_mounted_data_factory_definition",
+    "delete_mounted_data_factory",
+    "generate_dax_query_view_url",
+    "delete_semantic_model",
+    "delete_workspace",
+    "create_sql_database",
+    "delete_sql_database",
+    "list_sql_databases",
+    "delta_analyzer_history",
+    "recover_lakehouse_object",
 ]
