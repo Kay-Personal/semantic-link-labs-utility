@@ -67,8 +67,4 @@ __all__ = [
     "delete_semantic_model",
     "provision_sales_tables",
     "apply_sales_metadata",
-    "simulate_etl",
-    "delete_reinsert_rows",
-    "get_storage_table_column_segments",
-    "get_source_tables",
     ]
