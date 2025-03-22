@@ -283,6 +283,10 @@ def get_storage_table_column_segments(
                 .withColumn("[TESTRUNTIMESTAMP]", lit(row["TestRunTimestamp"]))
             )
 
+            # Remove the [ ] brackets from the column names
+            clean_columns = [col.replace("[", "").replace("]", "") for col in dax_df.columns]
+            dax_df = dax_df.toDF(*clean_columns)
+
             # If results_df is None, initialize it with the first DataFrame
             if results_df is None:
                 results_df = dax_df
@@ -291,6 +295,7 @@ def get_storage_table_column_segments(
                 results_df = results_df.union(dax_df)
 
     return results_df
+
 
 def analyze_delta_tables(
     tables_info: 'pyspark.sql.DataFrame',
