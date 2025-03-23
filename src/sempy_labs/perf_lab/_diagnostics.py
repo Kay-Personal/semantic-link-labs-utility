@@ -353,11 +353,15 @@ def analyze_delta_tables(
             skip_cardinality = skip_cardinality,
         )
 
-        da_results['History'] = get_delta_table_history(
+        history_df = get_delta_table_history(
             table_name = table_name,
             lakehouse = lakehouse_name,
             workspace = workspace_name,
         )
+        history_df['Operation Parameters'] = history_df['Operation Parameters'].astype(str)
+        history_df['Operation Metrics'] = history_df['Operation Metrics'].astype(str)
+
+        da_results['History'] = history_df
         
         results[table_name] = da_results
     
