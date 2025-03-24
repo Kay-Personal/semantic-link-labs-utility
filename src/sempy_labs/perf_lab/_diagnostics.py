@@ -275,8 +275,8 @@ def get_storage_table_column_segments(
             # Add some more information from the test_cycle_definitions
             dax_df = spark.createDataFrame(dax_fdf)
             dax_df = (
-                dax_df.withColumn("[WORKSPACE_NAME]", lit(target_workspace_id))
-                .withColumn("[WORKSPACE_ID]", lit(target_dataset_name))
+                dax_df.withColumn("[WORKSPACE_NAME]", lit(target_workspace_name))
+                .withColumn("[WORKSPACE_ID]", lit(target_workspace_id))
                 .withColumn("[DATASET_NAME]", lit(target_dataset_name))
                 .withColumn("[DATASET_ID]", lit(target_dataset_id))
                 .withColumn("[TESTRUNID]", lit(row["TestRunId"]))
