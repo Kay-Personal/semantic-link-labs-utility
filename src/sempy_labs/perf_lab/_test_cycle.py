@@ -644,7 +644,7 @@ class ExecutionTracker:
         log_event(status, message)
             Logs an event with the given status and message.
     """    
-    def __init__(self, table_name, run_id = str(uuid.uuid4()), description = ""):
+    def __init__(self, table_name, run_id = str(uuid.uuid4()), description = "", capture_output = False):
         """
         Initializes the ExecutionTracker with the specified table name.
 
@@ -653,8 +653,10 @@ class ExecutionTracker:
                 The name of the Delta table where logs will be stored.
             run_id : str, Default = random id
                 The id of the execution run.
-            description : str
+            description : str, Default = ""
                 A description of the execution run.
+            capture_output : bool, Default = False
+                A flag indicating if sys.stdout and sys.stderr should be captured.
         """
 
         self.table_name = table_name
@@ -674,9 +676,10 @@ class ExecutionTracker:
         """
         self.start_time = self.spark.sql("SELECT current_timestamp()").collect()[0][0]
         
-        self.output = io.StringIO()
-        self.dual_output = self.DualOutput(self.output)
-        self.dual_output.__enter__()
+        if self.capture_output:
+            self.output = io.StringIO()
+            self.dual_output = self.DualOutput(self.output)
+            self.dual_output.__enter__()
 
         return self
 
@@ -699,9 +702,10 @@ class ExecutionTracker:
 
         self.end_time = self.spark.sql("SELECT current_timestamp()").collect()[0][0]
         
-        output = self.output.getvalue()
-        if output:
-            self.log_event("OUTPUT", output)
+        if self.capture_output:
+            output = self.output.getvalue()
+            if output:
+                self.log_event("OUTPUT", output)
 
         if exc_type is None:
             self.log_event("SUCCESS", "Execution completed successfully.")
