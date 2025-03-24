@@ -1,19 +1,20 @@
+import sys
+import io
+import uuid
+from contextlib import contextmanager
+
 from typing import Optional, Tuple, List
 from sempy_labs.perf_lab._test_suite import TestSuite
 
 import sempy.fabric as fabric
 import sempy_labs._icons as icons
 from sempy_labs._helper_functions import (
-    resolve_workspace_name_and_id,
-    resolve_lakehouse_name_and_id,
-    resolve_dataset_name_and_id,
     generate_guid,
-    _get_or_create_workspace,
     _create_spark_session,
     save_as_delta_table,
     )
 
-from sempy_labs import deploy_semantic_model, clear_cache
+from sempy_labs import clear_cache
 from sempy_labs._refresh_semantic_model import refresh_semantic_model
 
 
@@ -642,9 +643,7 @@ class ExecutionTracker:
     Methods:
         log_event(status, message)
             Logs an event with the given status and message.
-    """
-    import uuid
-    
+    """    
     def __init__(self, table_name, run_id = str(uuid.uuid4()), description = ""):
         """
         Initializes the ExecutionTracker with the specified table name.
@@ -664,6 +663,7 @@ class ExecutionTracker:
         self.spark = _create_spark_session()
         self.start_time = None
         self.end_time = None
+        self.output = io.StringIO()
 
     def __enter__(self):
         """
@@ -673,6 +673,11 @@ class ExecutionTracker:
             self: The ExecutionTracker instance.
         """
         self.start_time = self.spark.sql("SELECT current_timestamp()").collect()[0][0]
+        
+        self.output = io.StringIO()
+        self.dual_output = self.DualOutput(self.output)
+        self.dual_output.__enter__()
+
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -693,12 +698,50 @@ class ExecutionTracker:
         import traceback
 
         self.end_time = self.spark.sql("SELECT current_timestamp()").collect()[0][0]
+        
+        output = self.output.getvalue()
+        if output:
+            self.log_event("OUTPUT", output)
+
         if exc_type is None:
             self.log_event("SUCCESS", "Execution completed successfully.")
         else:
             error_message = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
             self.log_event("ERROR", error_message)
         return False  # Propagate exception if any
+
+    @contextmanager
+    def DualOutput(self, output_stream):
+        """
+        Context manager to duplicate output to both the notebook and a given output stream.
+
+        Args:
+            output_stream : io.StringIO
+                The output stream to capture the output.
+        """
+        class DualWriter:
+            def __init__(self, stream1, stream2):
+                self.stream1 = stream1
+                self.stream2 = stream2
+
+            def write(self, message):
+                self.stream1.write(message)
+                self.stream2.write(message)
+
+            def flush(self):
+                self.stream1.flush()
+                self.stream2.flush()
+
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = DualWriter(original_stdout, output_stream)
+        sys.stderr = DualWriter(original_stderr, output_stream)
+        
+        try:
+            yield
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
     def log_event(self, status, message):
         """
